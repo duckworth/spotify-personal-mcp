@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "mcp__spotify__get_top_tracks",
-      "mcp__spotify__search_tracks"
+      "mcp__spotify__search_tracks",
+      "mcp__spotify__create_playlist"
     ]
   },
   "enableAllProjectMcpServers": true,

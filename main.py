@@ -1,11 +1,12 @@
+import contextlib
 import os
 import sys
 from pathlib import Path
 
 import spotipy
 from spotipy import SpotifyException
-from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler
+from spotipy.oauth2 import SpotifyOAuth
 
 try:
     from dotenv import load_dotenv
@@ -18,7 +19,18 @@ if load_dotenv:
     if DOTENV_PATH.exists():
         load_dotenv(dotenv_path=DOTENV_PATH, override=False)
 
-CACHE_PATH = os.getenv("SPOTIFY_TOKEN_CACHE", os.path.expanduser("~/.cache/spotify-mcp"))
+# Use project-local cache file to ensure consistency with MCP server
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+def _norm_cache_path(raw: str, default: Path) -> str:
+    """Expand ~ and env vars; return absolute path as string."""
+    p = Path(os.path.expandvars(os.path.expanduser(raw))) if raw else default
+    p = p if p.is_absolute() else (Path.cwd() / p)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return str(p)
+
+TOKEN_FILE = _norm_cache_path(os.getenv("SPOTIFY_TOKEN_CACHE"),
+                              PROJECT_ROOT / ".spotify-token.json")
 
 
 def _require_env(name: str) -> str:
@@ -41,7 +53,7 @@ def get_spotify_client(scope: str) -> spotipy.Spotify:
     redirect_uri = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
 
     canon_scope = _canonical_scope(scope)
-    cache_handler = CacheFileHandler(cache_path=CACHE_PATH)
+    cache_handler = CacheFileHandler(cache_path=TOKEN_FILE)
     cached = bool(cache_handler.get_cached_token())
 
     auth = SpotifyOAuth(
@@ -49,10 +61,15 @@ def get_spotify_client(scope: str) -> spotipy.Spotify:
         client_secret=client_secret,
         redirect_uri=redirect_uri,
         scope=canon_scope,
-        cache_handler=cache_handler,  # explicit cache handler
-        open_browser=not cached,      # only open browser if no cache
+        cache_handler=cache_handler,
+        open_browser=not cached,
         show_dialog=False,
     )
+    # Eagerly resolve token once and ensure it's saved
+    token = auth.get_cached_token() or auth.get_access_token(as_dict=True)
+    if token:
+        with contextlib.suppress(Exception):
+            cache_handler.save_token_to_cache(token)
     return spotipy.Spotify(auth_manager=auth)
 
 

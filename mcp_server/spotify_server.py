@@ -8,8 +8,8 @@ from typing import Any, Literal
 
 import spotipy
 from spotipy import SpotifyException
-from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler
+from spotipy.oauth2 import SpotifyOAuth
 
 try:
     from dotenv import load_dotenv
@@ -28,6 +28,18 @@ import contextlib
 
 from mcp.server.fastmcp import FastMCP
 
+
+# ----------------------------
+# Helper functions (defined before constants that use them)
+# ----------------------------
+def _norm_cache_path(raw: str | None, default: Path) -> str:
+    """Expand ~ and env vars; return absolute path as string."""
+    p = Path(os.path.expandvars(os.path.expanduser(raw))) if raw else default
+    # don't require the file to exist; just ensure parent dir exists
+    p = p if p.is_absolute() else (Path.cwd() / p)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return str(p)
+
 # ----------------------------
 # Config / constants
 # ----------------------------
@@ -41,7 +53,12 @@ DEFAULT_SCOPE = os.getenv(
 )
 
 DEFAULT_REDIRECT = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:8888/callback")
-CACHE_PATH = os.getenv("SPOTIFY_TOKEN_CACHE", os.path.expanduser("~/.cache/spotify-mcp"))
+
+# Use normalized paths to ensure ~ expansion and absolute paths
+TOKEN_FILE = _norm_cache_path(os.getenv("SPOTIFY_TOKEN_CACHE"),
+                              PROJECT_ROOT / ".spotify-token.json")
+LOG_FILE = _norm_cache_path(os.getenv("SPOTIFY_MCP_LOG"),
+                            PROJECT_ROOT / ".spotify-mcp.log")
 
 VALID_TIME_RANGES = {"short_term", "medium_term", "long_term"}
 
@@ -54,6 +71,12 @@ def _require_env(name: str) -> str:
     if not val:
         raise RuntimeError(f"Missing required environment variable: {name}")
     return val
+
+
+def _log(msg: str) -> None:
+    """Log debug messages to project file since Claude often hides server stdout."""
+    with contextlib.suppress(Exception), open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(msg.rstrip() + "\n")
 
 
 def _canonical_scope(scope: str) -> str:
@@ -70,7 +93,7 @@ _AUTH_MANAGER: SpotifyOAuth | None = None
 def _spotify(scope: str = DEFAULT_SCOPE) -> spotipy.Spotify:
     """
     Get or create a singleton Spotify client.
-    - Uses a file cache so tokens persist between calls/runs.
+    - Uses a project-local file cache so tokens persist between fresh processes.
     - Only opens a browser if no cache token exists.
     """
     global _SPOTIFY_CLIENT, _AUTH_MANAGER
@@ -80,22 +103,35 @@ def _spotify(scope: str = DEFAULT_SCOPE) -> spotipy.Spotify:
 
     client_id = _require_env("SPOTIFY_CLIENT_ID")
     client_secret = _require_env("SPOTIFY_CLIENT_SECRET")
-
     canon_scope = _canonical_scope(scope)
-    cache_handler = CacheFileHandler(cache_path=CACHE_PATH)
 
-    # detect whether we already have a cached token
-    cached = bool(cache_handler.get_cached_token())
+    cache_handler = CacheFileHandler(cache_path=TOKEN_FILE)
+    cached_token = cache_handler.get_cached_token()
+    cached_status = 'yes' if cached_token else 'no'
+    _log(f"[auth] cache file={TOKEN_FILE} cached={cached_status} scope='{canon_scope}'")
 
     _AUTH_MANAGER = SpotifyOAuth(
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=DEFAULT_REDIRECT,
         scope=canon_scope,
-        cache_handler=cache_handler,   # <- explicit cache handler
-        open_browser=not cached,       # <- only open browser if no cache yet
-        show_dialog=False,             # <- don't force consent if cache exists
+        cache_handler=cache_handler,
+        open_browser=not bool(cached_token),  # only for first-time
+        show_dialog=False,
     )
+
+    # Eagerly seed/refresh once and ensure it's saved
+    try:
+        token = _AUTH_MANAGER.get_cached_token() or _AUTH_MANAGER.get_access_token(as_dict=True)
+        if token:
+            try:
+                cache_handler.save_token_to_cache(token)  # force write; belt & suspenders
+            except Exception as e:
+                _log(f"[auth] save_token_to_cache error: {e!r}")
+        _log(f"[auth] post-init token={'yes' if token else 'no'}")
+    except Exception as e:
+        _log(f"[auth] token fetch error: {e!r}")
+        raise
 
     _SPOTIFY_CLIENT = spotipy.Spotify(auth_manager=_AUTH_MANAGER)
     return _SPOTIFY_CLIENT

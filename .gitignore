@@ -163,3 +163,7 @@ cython_debug/
 .idea/
 
 .env
+
+# Spotify MCP cache and log files
+.spotify-token.json
+.spotify-mcp.log
