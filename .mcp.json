@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "spotify": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "run",
+        "-m",
+        "mcp_server.spotify_server"
+      ],
+      "env": {}
+    }
+  }
+}

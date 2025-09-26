@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__spotify__get_top_tracks",
+      "mcp__spotify__search_tracks"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "spotify"
+  ]
+}
